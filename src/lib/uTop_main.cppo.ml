@@ -1,10 +1,16 @@
 (*
- * uTop_main.ml
- * ------------
+ * uTop_main.cppo.ml
+ *
+ * -----------------
+ * Original code:
  * Copyright : (c) 2011, Jeremie Dimino <jeremie@dimino.org>
  * Licence   : BSD3
  *
- * This file is a part of utop.
+ * Modified code:
+ * Copyright : (c) 2015, Steve Zdancewic <steve.zdancewic@gmail.com>
+ *
+ * This file is modified from utop as part of owl.
+ *
  *)
 
 open CamomileLibraryDyn.Camomile
@@ -689,26 +695,54 @@ let rec loop term =
 let welcome term =
   (* Create a context to render the welcome message. *)
   let size = LTerm.size term in
-  let size = { rows = 3; cols = size.cols } in
+  let size = { rows = 6; cols = size.cols } in
   let matrix = LTerm_draw.make_matrix size in
   let ctx = LTerm_draw.context matrix size in
 
+  let owl_feathers = LTerm_style.rgb 180 95 0 in
+  let owl_beak     = LTerm_style.rgb 250 190 5 in
+  let owl_eyes     = LTerm_style.rgb 0 0 0 in
+  let owl_banner   = LTerm_style.rgb 2 16 173 in
+  let owl_line     = LTerm_style.rgb 112 70 11 in
+				 
+  let open LTerm_text in
+  let open LTerm_style in
+  let fe s = [B_fg owl_feathers; S s; E_fg] in
+  let bk s = [B_fg owl_beak; S s; E_fg] in
+  let ey s = [B_fg owl_eyes; S s; E_fg] in
+  let bn s = [B_fg owl_banner; S s; E_fg] in
+  let ln s = [B_fg owl_line; S s; E_fg] in
+  let str = "    ____         __         " in
+  let line1 = (bn str) in
+  let line2 = (bn "   / __ \\_    __/ /  ") @ (fe "{") @ (ey "o") @ (bk ",") @ (ey "o") @ (fe "}") in
+  let line3 = (bn "  / /_/ / |/|/ / /   ") @ (fe "/)__)") in
+  let line4 = (ln "──") @ (bn "\\____/|__,__/_/") @ (ln "─────") @ (bk "\"") @ (ln "─") @ (bk "\"") @ (ln "───") in
+  let indent = (size.cols - String.length str) / 2 in
   (* Draw the message in a box. *)
 
-  let message = Printf.sprintf "Welcome to utop version %s (using OCaml version %s)!" UTop.version Sys.ocaml_version in
+  LTerm_draw.fill_style ctx LTerm_style.({ none with foreground = Some owl_line; bold = Some true });
+  LTerm_draw.draw_hline ctx 4 0 indent LTerm_draw.Heavy;
+  LTerm_draw.draw_hline ctx 4 (indent + String.length str) size.cols LTerm_draw.Heavy;
 
-  LTerm_draw.fill_style ctx LTerm_style.({ none with foreground = Some lcyan });
+  (* LTerm_draw.draw_hline ctx 0 0 size.cols LTerm_draw.Light; *)
+  (* LTerm_draw.draw_frame ctx { *)
+  (*   row1 = 0; *)
+  (*   row2 = 6; *)
+  (*   col1 = (size.cols - (String.length str + 4)) / 2; *)
+  (*   col2 = (size.cols + (String.length str + 4)) / 2; *)
+  (* } LTerm_draw.Light; *)
+  
+  LTerm_draw.draw_styled ctx 1 indent (eval ([B_bold true] @ line1 @ [B_bold false]));
+  LTerm_draw.draw_styled ctx 2 indent (eval ([B_bold true] @ line2 @ [B_bold false]));
+  LTerm_draw.draw_styled ctx 3 indent (eval ([B_bold true] @ line3 @ [B_bold false]));
+  LTerm_draw.draw_styled ctx 4 indent (eval ([B_bold true] @ line4 @ [B_bold false]));    
 
-  LTerm_draw.draw_hline ctx 0 0 size.cols LTerm_draw.Light;
-  LTerm_draw.draw_frame ctx {
-    row1 = 0;
-    row2 = 3;
-    col1 = (size.cols - (String.length message + 4)) / 2;
-    col2 = (size.cols + (String.length message + 4)) / 2;
-  } LTerm_draw.Light;
+  (* Clear the screen. *)
+  LTerm.clear_screen term >>= fun () ->
 
-  LTerm_draw.draw_styled ctx 1 ((size.cols - String.length message) / 2) (eval [B_fg LTerm_style.yellow; S message]);
-
+  (* Move to the origin. *)
+  LTerm.goto term {row=0; col=0} >>= fun () ->
+  
   (* Render to the screen. *)
   LTerm.print_box term matrix >>= fun () ->
 
@@ -1252,6 +1286,7 @@ let common_init () =
   Location.input_name := UTop.input_name;
   (* Make sure SIGINT is catched while executing OCaml code. *)
   Sys.catch_break true;
+
   (* Load system init files. *)
   (match try Some (Sys.getenv "OCAML_TOPLEVEL_PATH") with Not_found -> None with
     | Some dir ->
@@ -1307,7 +1342,7 @@ let main_aux () =
   if !emacs_mode then begin
     UTop_private.set_ui UTop_private.Emacs;
     let module Emacs = Emacs (struct end) in
-    Printf.printf "Welcome to utop version %s (using OCaml version %s)!\n\n%!" UTop.version Sys.ocaml_version;
+    Printf.printf "Welcome to Owl version %s (using OCaml version %s)!\n\n%!" UTop.version Sys.ocaml_version;
     common_init ();
     Emacs.loop ()
   end else begin
@@ -1322,8 +1357,16 @@ let main_aux () =
       Lwt_main.run (welcome term);
       (* Common initialization. *)
       common_init ();
+      (* Set defaults *)
+      UTop.set_topfind_verbose false;
+      UTop.set_show_box false;
+      UTop.set_profile UTop.Light;
+      UTop.prompt := fst (React.S.create LTerm_text.(
+			     eval [ B_fg (LTerm_style.rgb 2 16 173); S "\nowl> "]));
+
+      
       (* Print help message. *)
-      print_string "\nType #utop_help for help about using utop.\n\n";
+      (* print_string "\nType #utop_help for help about using utop.\n\n"; *)
       flush stdout;
       (* Main loop. *)
       try
