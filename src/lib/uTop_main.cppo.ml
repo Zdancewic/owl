@@ -1359,7 +1359,7 @@ let main_aux () =
       common_init ();
       (* Set defaults *)
       UTop.set_topfind_verbose false;
-      UTop.set_show_box false;
+      (* UTop.set_show_box false; *)
       UTop.set_profile UTop.Light;
       UTop.prompt := fst (React.S.create LTerm_text.(
 			     eval [ B_fg (LTerm_style.rgb 2 16 173); S "\nowl> "]));

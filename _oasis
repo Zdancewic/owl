@@ -33,7 +33,7 @@ Flag camlp4
   Description: camlp4 support
   Default: false
 
-Library owl
+Library utop_owl
   Path: src/lib
   Modules:
     UTop,
@@ -46,15 +46,33 @@ Library owl
     UTop_complete,
     UTop_styles
   BuildDepends: threads, findlib, lambda-term (>= 1.2)
-  XMETADescription: owl configuration
+  XMETADescription: utop_owl configuration
   XMETARequires: findlib, lambda-term
+
+
+Library owl
+  Path: src/owl
+  Modules:
+    Owl
+  BuildDepends: findlib, graphics
+  XMETADescription: owl configuration
+  XMETARequires: findlib, graphics
+
+Library owlGraphics
+  Path: src/owl
+  Modules:
+    OwlGraphics
+  BuildDepends: findlib, graphics
+  FindlibParent: owl
 
 Executable owl
   Install: true
   Path: src/top
   CompiledObject: byte
   MainIs: uTop_top.ml
-  BuildDepends: threads, findlib, lambda-term, owl
+  BuildDepends: threads, findlib, lambda-term, utop_owl, owl
+
+
 
 # +-------------------------------------------------------------------+
 # | Doc                                                               |

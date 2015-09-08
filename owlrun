@@ -1,0 +1,34 @@
+#!/bin/sh
+
+# owlrun
+# ----------------
+# Copyright : (c) 2015, Steve Zdancewic <steve.zdancewic@gmail.org>
+# Licence   : BSD3
+#
+# This file is a part of owl.
+
+
+# create the owl directory (if it doesn't already exist)
+mkdir -p ~/Documents/OwlCode
+
+# make sure that the .ocamlinit file exists 
+if [ ! -e ~/Documents/OwlCode/.ocamlinit ]
+then
+  cat > ~/Documents/OwlCode/.ocamlinit << EOF
+#require "owl"
+#load "owl.cma"
+#load "owlGraphics.cma"
+
+;; open Owl
+;; open OwlGraphics
+
+(* Added by OPAM. *)
+let () =
+  try Topdirs.dir_directory (Sys.getenv "OCAML_TOPLEVEL_PATH")
+  with Not_found -> ()
+;;
+EOF
+fi
+
+cd ~/Documents/OwlCode/
+owl
