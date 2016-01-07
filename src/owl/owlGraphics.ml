@@ -9,7 +9,7 @@
 
 (* Wrapper for OCaml's graphics library. *)
 
-type color = Graphics.color
+type  color = Graphics.color
 		
 let rgb ~red:r ~green:g ~blue:b : color =
   Graphics.rgb r g b
@@ -42,7 +42,10 @@ let colors = [
     "brown";
   ]
 
+let color_state = ref black
+	       
 let set_color ~color:c =
+  color_state := c;
   Graphics.set_color c
 		 
 let make_window () =
@@ -96,6 +99,7 @@ let fill_ellipse ~x ~y ~rx ~ry =
 
 			
 let draw_owl ~x ~y =
+  let old_color = !color_state in 
   set_color brown;
   text x y "{";
   set_color black;
@@ -108,5 +112,6 @@ let draw_owl ~x ~y =
   Graphics.draw_string "}";
   text x (y - 17) "/)__)";
   set_color orange;
-  text x (y - 34) " \" \""
+  text x (y - 34) " \" \"";
+  set_color old_color
   

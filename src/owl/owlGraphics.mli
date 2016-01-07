@@ -10,6 +10,9 @@ val yellow : color
 val green  : color
 val blue   : color
 val violet : color
+val cyan    : color
+val magenta : color
+val brown   : color
 
 val colors : string list
 val set_color : color:color -> unit
