@@ -1,5 +1,5 @@
 (*
- * owl.ml
+ * owlGraphics.ml
  * ----------------
  * Copyright : (c) 2015, Steve Zdancewic <steve.zdancewic@gmail.org>
  * Licence   : BSD3
@@ -29,18 +29,19 @@ let magenta = rgb 255 255 0
 let brown   = rgb 180 95 0
 		 
 let colors = [
-    "white";
-    "black";
-    "red";
-    "orange";
-    "yellow";
-    "green";
-    "blue";
-    "violet";
-    "cyan";
-    "magenta";
-    "brown";
-  ]
+  "white";
+  "grey";
+  "black";
+  "red";
+  "orange";
+  "yellow";
+  "green";
+  "blue";
+  "violet";
+  "cyan";
+  "magenta";
+  "brown";
+]
 
 let color_state = ref black
 	       
@@ -53,7 +54,8 @@ let make_window () =
   Graphics.open_graph " 500x500";
   Graphics.set_window_title "Owl Graphics";
   Graphics.set_font "-*-helvetica-bold-r-*-*-17-120-*-*-*-*-iso8859-1";
-  Graphics.set_line_width 3
+  Graphics.set_line_width 3;
+  set_color black
 
 let clear_window () =
   Graphics.clear_graph ()
@@ -96,7 +98,8 @@ let fill_circle ~x ~y ~radius =
 let fill_ellipse ~x ~y ~rx ~ry =
   Graphics.fill_ellipse x y rx ry
 
-
+let get_color () =
+  !color_state
 			
 let draw_owl ~x ~y =
   let old_color = !color_state in 
@@ -114,4 +117,12 @@ let draw_owl ~x ~y =
   set_color orange;
   text x (y - 34) " \" \"";
   set_color old_color
+
+let mouse_x () : int =
+  let (x, _) = Graphics.mouse_pos () in
+  x
+
+let mouse_y () : int =
+  let (_, y) = Graphics.mouse_pos () in
+  y
   

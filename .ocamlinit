@@ -2,6 +2,7 @@
 
 #load "owl.cma"
 #load "owlGraphics.cma"
+#load "plotFun.cma"
 
 (*
 #require "lambda-term"

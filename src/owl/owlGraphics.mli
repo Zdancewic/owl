@@ -3,6 +3,7 @@ type color
 val rgb : red:int -> green:int -> blue:int -> color
        
 val white  : color
+val grey   : color
 val black  : color
 val red    : color
 val orange : color
@@ -16,6 +17,7 @@ val brown   : color
 
 val colors : string list
 val set_color : color:color -> unit
+val get_color : unit -> color
 
 val make_window  : unit -> unit
 val clear_window : unit -> unit
@@ -34,3 +36,6 @@ val fill_circle  : x:int -> y:int -> radius:int -> unit
 val fill_ellipse : x:int -> y:int -> rx:int -> ry:int -> unit
 
 val draw_owl : x:int -> y:int -> unit
+
+val mouse_x : unit -> int
+val mouse_y : unit -> int
