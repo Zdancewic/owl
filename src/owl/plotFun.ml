@@ -60,6 +60,7 @@ let draw_axes (p:plot) =
   line px0 0 px0 (height ());
   line 0 py0 (width ()) py0
 
+
 let draw_vis p {f; c} =
   let pts = Array.init (width ())
       (fun x -> (x, (plot_y p (f (fun_x p x)))))
@@ -67,3 +68,8 @@ let draw_vis p {f; c} =
   set_color c;
   Graphics.set_line_width 1;
   Graphics.draw_poly_line pts
+
+let draw_fun f =
+  let c = get_color () in
+  let v = {f;c} in
+  draw_vis base v

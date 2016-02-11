@@ -25,7 +25,7 @@ let green   = rgb 78 154 6
 let blue    = rgb 52 101 164
 let violet  = rgb 117 80 123	       
 let cyan    = rgb 0 255 255
-let magenta = rgb 255 255 0
+let magenta = rgb 255 0 255
 let brown   = rgb 180 95 0
 		 
 let colors = [
