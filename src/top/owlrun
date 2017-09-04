@@ -20,8 +20,8 @@ let () =
 ;;
 #use "topfind";;
 #load "graphics.cma";;
-#require "owl";;
-#load "owl.cma";;
+#require "owlcode";;
+#load "owlcode.cma";;
 EOF
 
 cd ~/Documents/OwlCode/

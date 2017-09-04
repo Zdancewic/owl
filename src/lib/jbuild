@@ -1,8 +1,8 @@
 (jbuild_version 1)
 
 (library
- ((name owl)
-  (public_name owl)
+ ((name owlcode)
+  (public_name owlcode)
   (wrapped false)
   (modes (byte))
   (libraries (graphics))))
