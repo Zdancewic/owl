@@ -1,13 +1,13 @@
 (jbuild_version 1)
 
 (executables
- ((names (utop))
-  (libraries (utop))
+ ((names (owl))
+  (libraries (owlUtop))
   (link_flags (-linkall))))
 
 (rule
- ((targets (utop-expunged.bc))
-  (deps    (utop.bc))
+ ((targets (owl-expunged.bc))
+  (deps    (owl.bc))
   (action  (run ${exe:expunge/expunge.exe}
             ${bin:ocamlobjinfo}
             ${ocaml_where}
@@ -19,5 +19,7 @@
 
 (install
  ((section bin)
-  (files ((utop-expunged.bc as utop)
-          (utop.bc          as utop-full)))))
+  (files ((owl-expunged.bc as owl)
+          (owl.bc          as owl-full)
+	  owlrun
+          ))))
