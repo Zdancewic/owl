@@ -12,18 +12,17 @@
 mkdir -p ~/Documents/OwlCode
 
 # make sure that the .ocamlinit file exists 
-if [ ! -e ~/Documents/OwlCode/.ocamlinit ]
-then
-  cat > ~/Documents/OwlCode/.ocamlinit << EOF
-#load "graphics.cma"
-#load "owl.cma"
-
+cat > ~/Documents/OwlCode/.ocamlinit << EOF
 (* Added by OPAM. *)
 let () =
   try Topdirs.dir_directory (Sys.getenv "OCAML_TOPLEVEL_PATH")
   with Not_found -> ()
+;;
+#use "topfind";;
+#load "graphics.cma";;
+#require "owl";;
+#load "owl.cma";;
 EOF
-fi
 
 cd ~/Documents/OwlCode/
 owl
