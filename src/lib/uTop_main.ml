@@ -86,6 +86,19 @@ let convert_locs str locs = List.map (fun (a, b) -> (index_of_offset str a, inde
    | The read-line class                                             |
    +-----------------------------------------------------------------+ *)
 
+#if OCAML_VERSION >= (4, 04, 0)
+let ast_impl_kind = Pparse.Structure
+#else
+let ast_impl_kind = Config.ast_impl_magic_number
+#endif
+
+let preprocess input =
+  match input with
+    | Parsetree.Ptop_def pstr ->
+        Parsetree.Ptop_def
+          (Pparse.apply_rewriters ~tool_name:"ocaml" ast_impl_kind pstr)
+    | _ -> input
+
 let parse_input_multi input =
   let buf = Buffer.create 32 in
   let result =
@@ -95,39 +108,33 @@ let parse_input_multi input =
            | UTop.Error (locs, msg) ->
                UTop.Error (convert_locs input locs, "Error: " ^ msg ^ "\n")
            | UTop.Value phrases ->
-               (UTop.Value phrases))
+               try
+                 UTop.Value (List.map preprocess phrases)
+               with Pparse.Error error ->
+                 Pparse.report_error Format.str_formatter error;
+                 UTop.Error ([], "Error: " ^ Format.flush_str_formatter () ^ "\n"))
   in
   (result, Buffer.contents buf)
 
 let parse_and_check input eos_is_error =
   let buf = Buffer.create 32 in
-  let preprocess input =
-    match input with
-#if OCAML_VERSION >= (4, 02, 0)
-    | UTop.Value (Parsetree.Ptop_def pstr) ->
-        begin try
-          let pstr = Pparse.apply_rewriters ~tool_name:"ocaml"
-                                Config.ast_impl_magic_number pstr in
-          UTop.Value (Parsetree.Ptop_def pstr)
-        with Pparse.Error error ->
-          Pparse.report_error Format.str_formatter error;
-          UTop.Error ([], Format.flush_str_formatter ())
-        end
-#endif
-    | _ -> input
-  in
   let result =
     UTop.collect_formatters buf [Format.err_formatter]
       (fun () ->
-         match preprocess (!UTop.parse_toplevel_phrase input eos_is_error) with
+         match !UTop.parse_toplevel_phrase input eos_is_error with
            | UTop.Error (locs, msg) ->
                UTop.Error (convert_locs input locs, "Error: " ^ msg ^ "\n")
            | UTop.Value phrase ->
-               match UTop.check_phrase phrase with
-                 | None ->
-                     UTop.Value phrase
-                 | Some (locs, msg) ->
-                     UTop.Error (convert_locs input locs, msg))
+               try
+                 let phrase = preprocess phrase in
+                 match UTop.check_phrase phrase with
+                   | None ->
+                       UTop.Value phrase
+                   | Some (locs, msg) ->
+                       UTop.Error (convert_locs input locs, msg)
+               with Pparse.Error error ->
+                 Pparse.report_error Format.str_formatter error;
+                 UTop.Error ([], "Error: " ^ Format.flush_str_formatter () ^ "\n"))
   in
   (result, Buffer.contents buf)
 
@@ -142,12 +149,17 @@ let is_accept : LTerm_read_line.action -> bool = function
   | Accept -> true
   | action -> action == UTop.end_and_accept_current_phrase
 
-(* Read a phrase. If the result is a value, it is guaranteed to by a
+(* Read a phrase. If the result is a value, it is guaranteed to be a
    valid phrase (i.e. typable and compilable). It also returns
    warnings printed parsing. *)
 class read_phrase ~term = object(self)
   inherit [Parsetree.toplevel_phrase UTop.result * string] LTerm_read_line.engine ~history:(LTerm_history.contents UTop.history) () as super
   inherit [Parsetree.toplevel_phrase UTop.result * string] LTerm_read_line.term term as super_term
+
+  method create_temporary_file_for_external_editor =
+    Filename.temp_file "utop" ".ml"
+
+  method external_editor = UTop.get_external_editor ()
 
   val mutable return_value = None
 
@@ -184,6 +196,17 @@ class read_phrase ~term = object(self)
           let result = parse_and_check input eos_is_error in
           return_value <- Some result;
           LTerm_history.add UTop.history input;
+          let out, warnings = result in
+          begin
+            match out with
+            | UTop.Value _ ->
+              UTop_history.add_input UTop.stashable_session_history input;
+              UTop_history.add_warnings UTop.stashable_session_history warnings;
+            | (UTop.Error (_, msg)) ->
+              UTop_history.add_bad_input UTop.stashable_session_history input;
+              UTop_history.add_warnings UTop.stashable_session_history warnings;
+              UTop_history.add_error UTop.stashable_session_history msg;
+          end;
           return result
         with UTop.Need_more ->
           (* Input not finished, continue. *)
@@ -258,7 +281,7 @@ let fix_string str =
     let buf = Buffer.create (len + 128) in
     if ofs > 0 then Buffer.add_substring buf str 0 ofs;
     let rec loop ofs =
-      Printf.bprintf buf "\\y%02x" (Char.code (String.unsafe_get str ofs));
+      Zed_utf8.add buf (UChar.of_char str.[ofs]);
       let ofs1 = ofs + 1 in
       let ofs2, _, _ = Zed_utf8.next_error str ofs1 in
       if ofs1 < ofs2 then
@@ -290,6 +313,15 @@ let render_out_phrase term string =
 let orig_print_out_signature = !Toploop.print_out_signature
 let orig_print_out_phrase = !Toploop.print_out_phrase
 
+let is_implicit_name name =
+  name <> "" &&
+  name.[0] = '_' &&
+  try
+    let _ = int_of_string @@ String.sub name 1 (String.length name - 1) in
+    true
+  with
+    Failure _ -> false
+
 let rec map_items unwrap wrap items =
   match items with
   | [] ->
@@ -301,25 +333,24 @@ let rec map_items unwrap wrap items =
       | Outcometree.Osig_class (_, name, _, _, rs)
       | Outcometree.Osig_class_type (_, name, _, _, rs)
       | Outcometree.Osig_module (name, _, rs)
-#if OCAML_VERSION >= (4, 02, 0)
       | Outcometree.Osig_type ({ Outcometree.otype_name = name }, rs) ->
-#else
-      | Outcometree.Osig_type ((name, _, _, _, _), rs) ->
-#endif
         (name, rs)
-#if OCAML_VERSION >= (4, 02, 0)
       | Outcometree.Osig_typext ({ Outcometree.oext_name = name}, _)
-#else
-      | Outcometree.Osig_exception (name, _)
-#endif
       | Outcometree.Osig_modtype (name, _)
+#if OCAML_VERSION < (4, 03, 0)
       | Outcometree.Osig_value (name, _, _) ->
         (name, Outcometree.Orec_not)
-#if OCAML_VERSION >= (4, 03, 0)
+#else
+      | Outcometree.Osig_value { oval_name = name; _ } ->
+        (name, Outcometree.Orec_not)
       | Outcometree.Osig_ellipsis -> ("", Outcometree.Orec_not)
 #endif
     in
-    let keep = name = "" || name.[0] <> '_' in
+
+    let keep =
+      name = "" || name.[0] <> '_' ||
+      (UTop.get_create_implicits () && is_implicit_name name)
+    in
     if keep then
       item :: map_items unwrap wrap items
     else
@@ -351,11 +382,7 @@ let rec map_items unwrap wrap items =
               wrap (Outcometree.Osig_type (oty, Outcometree.Orec_first)) extra :: items'
             else
               items
-#if OCAML_VERSION >= (4, 02, 0)
           | Outcometree.Osig_typext _
-#else
-          | Outcometree.Osig_exception _
-#endif
 #if OCAML_VERSION >= (4, 03, 0)
           | Outcometree.Osig_ellipsis
 #endif
@@ -400,6 +427,8 @@ let with_loc loc str = {
 
 (* A rule for rewriting a toplevel expression. *)
 type rewrite_rule = {
+  type_to_rewrite : Longident.t;
+  mutable path_to_rewrite : Path.t option;
   required_values : Longident.t list;
   (* Values that must exist and be persistent for the rule to apply. *)
   rewrite : Location.t -> Parsetree.expression -> Parsetree.expression;
@@ -408,28 +437,10 @@ type rewrite_rule = {
   (* Whether the rule is enabled or not. *)
 }
 
-(* Rewrite rules, indexed by the identifier of the type
-   constructor. *)
-let rewrite_rules : (Longident.t, rewrite_rule) Hashtbl.t = Hashtbl.create 42
-
 let longident_lwt_main_run = Longident.Ldot (Longident.Lident "Lwt_main", "run")
 let longident_async_thread_safe_block_on_async_exn =
-  Longident.parse "Async.Std.Thread_safe.block_on_async_exn"
+  Longident.parse "Async.Thread_safe.block_on_async_exn"
 let longident_unit = Longident.Lident "()"
-
-#if OCAML_VERSION < (4, 02, 0)
-(* Wrap <expr> into: fun () -> <expr> *)
-let wrap_unit loc e =
-  let i = with_loc loc longident_unit in
-  let p = {
-    Parsetree.ppat_desc = Parsetree.Ppat_construct (i, None, false);
-    Parsetree.ppat_loc = loc;
-  } in
-  {
-    Parsetree.pexp_desc = Parsetree.Pexp_function ("", None, [(p, e)]);
-    Parsetree.pexp_loc = loc;
-  }
-#endif
 
 #if OCAML_VERSION >= (4, 03, 0)
 let nolabel = Asttypes.Nolabel
@@ -437,42 +448,28 @@ let nolabel = Asttypes.Nolabel
 let nolabel = ""
 #endif
 
-let () =
+let rewrite_rules = [
   (* Rewrite Lwt.t expressions to Lwt_main.run <expr> *)
-  Hashtbl.add rewrite_rules (Longident.Ldot (Longident.Lident "Lwt", "t")) {
+  {
+    type_to_rewrite = Longident.parse "Lwt.t";
+    path_to_rewrite = None;
     required_values = [longident_lwt_main_run];
     rewrite = (fun loc e ->
-#if OCAML_VERSION < (4, 02, 0)
-      { Parsetree.pexp_desc =
-          Parsetree.Pexp_apply
-            ({ Parsetree.pexp_desc = Parsetree.Pexp_ident (with_loc loc longident_lwt_main_run);
-               Parsetree.pexp_loc = loc },
-             [("", e)])
-      ; Parsetree.pexp_loc = loc }
-#else
       let open Ast_helper in
       with_default_loc loc (fun () ->
         Exp.apply (Exp.ident (with_loc loc longident_lwt_main_run)) [(nolabel, e)]
       )
-#endif
     );
     enabled = UTop.auto_run_lwt;
   };
 
-  (* Rewrite Async.Std.Defered.t expressions to
-     Async.Std.Thread_safe.block_on_async_exn (fun () -> <expr>). *)
-  let rule = {
+  (* Rewrite Async.Defered.t expressions to
+     Async.Thread_safe.block_on_async_exn (fun () -> <expr>). *)
+  {
+    type_to_rewrite = Longident.parse "Async.Deferred.t";
+    path_to_rewrite = None;
     required_values = [longident_async_thread_safe_block_on_async_exn];
     rewrite = (fun loc e ->
-#if OCAML_VERSION < (4, 02, 0)
-      { Parsetree.pexp_desc =
-          Parsetree.Pexp_apply
-            ({ Parsetree.pexp_desc = Parsetree.Pexp_ident
-                                       (with_loc loc longident_async_thread_safe_block_on_async_exn);
-               Parsetree.pexp_loc = loc },
-             [("", wrap_unit loc e)])
-      ; Parsetree.pexp_loc = loc }
-#else
       let open Ast_helper in
       let punit = Pat.construct (with_loc loc (Longident.Lident "()")) None in
       with_default_loc loc (fun () ->
@@ -480,62 +477,48 @@ let () =
           (Exp.ident (with_loc loc longident_async_thread_safe_block_on_async_exn))
           [(nolabel, Exp.fun_ nolabel None punit e)]
       )
-#endif
     );
     enabled = UTop.auto_run_async;
-  } in
-  let deferred_aliases =
-    [ "Async_core.Ivar.Deferred.t"
-    ; "Async_kernel.Ivar.Deferred.t"
-    ; "Async_kernel.Deferred0.t"
-    ]
-  in
-  List.iter (fun s ->
-    Hashtbl.add rewrite_rules (Longident.parse s) rule)
-    deferred_aliases
+  }
+]
 
-(* Returns whether the argument is a toplevel expression. *)
-let is_eval = function
-  | { Parsetree.pstr_desc = Parsetree.Pstr_eval _ } -> true
-  | _ -> false
+#if OCAML_VERSION >= (4, 04, 0)
+let lookup_type longident env =
+  let path = Env.lookup_type longident env in
+  (path, Env.find_type path env)
+#else
+let lookup_type = Env.lookup_type
+#endif
+
+let rule_path rule =
+  match rule.path_to_rewrite with
+  | Some _ as x -> x
+  | None ->
+    try
+      let env = !Toploop.toplevel_env in
+      let path =
+        match lookup_type rule.type_to_rewrite env with
+        | path, { Types.type_kind     = Types.Type_abstract
+                ; Types.type_private  = Asttypes.Public
+                ; Types.type_manifest = Some ty
+                } -> begin
+            match Ctype.expand_head env ty with
+            | { Types.desc = Types.Tconstr (path, _, _) } -> path
+            | _ -> path
+          end
+        | path, _ -> path
+      in
+      let opt = Some path in
+      rule.path_to_rewrite <- opt;
+      opt
+    with _ ->
+      None
 
 (* Returns whether the given path is persistent. *)
 let rec is_persistent_path = function
   | Path.Pident id -> Ident.persistent id
   | Path.Pdot (p, _, _) -> is_persistent_path p
   | Path.Papply (_, p) -> is_persistent_path p
-
-(* Convert a path to a long identifier. *)
-let rec longident_of_path path =
-  match path with
-    | Path.Pident id ->
-      Longident.Lident (Ident.name id)
-    | Path.Pdot (path, s, _) ->
-      Longident.Ldot (longident_of_path path, s)
-    | Path.Papply (p1, p2) ->
-      Longident.Lapply (longident_of_path p1, longident_of_path p2)
-
-(* Returns the rewrite rule associated to a type, if any. *)
-let rec rule_of_type typ =
-  match typ.Types.desc with
-    | Types.Tlink typ ->
-      rule_of_type typ
-    | Types.Tconstr (path, _, _) -> begin
-      match try Some (Env.find_type path !Toploop.toplevel_env) with Not_found -> None with
-      | Some {
-        Types.type_kind = Types.Type_abstract;
-        Types.type_private = Asttypes.Public;
-        Types.type_manifest = Some typ;
-      } ->
-        rule_of_type typ
-      | _ ->
-        try
-          Some (Hashtbl.find rewrite_rules (longident_of_path path))
-        with Not_found ->
-          None
-    end
-    | _ ->
-      None
 
 (* Check that the given long identifier is present in the environment
    and is persistent. *)
@@ -545,25 +528,30 @@ let is_persistent_in_env longident =
   with Not_found ->
     false
 
-#if OCAML_VERSION < (4, 02, 0)
-let rewrite_str_item pstr_item tstr_item =
-  match pstr_item, tstr_item.Typedtree.str_desc with
-    | ({ Parsetree.pstr_desc = Parsetree.Pstr_eval e;
-         Parsetree.pstr_loc = loc },
-       Typedtree.Tstr_eval { Typedtree.exp_type = typ }) -> begin
-      match rule_of_type typ with
-        | Some rule ->
-          if React.S.value rule.enabled && List.for_all is_persistent_in_env rule.required_values then
-            { Parsetree.pstr_desc = Parsetree.Pstr_eval (rule.rewrite loc e);
-              Parsetree.pstr_loc = loc }
-          else
-            pstr_item
-        | None ->
-          pstr_item
+let rule_matches rule path =
+  React.S.value rule.enabled &&
+  (match rule_path rule with
+   | None -> false
+   | Some path' -> Path.same path path') &&
+  List.for_all is_persistent_in_env rule.required_values
+
+(* Returns whether the argument is a toplevel expression. *)
+let is_eval = function
+  | { Parsetree.pstr_desc = Parsetree.Pstr_eval _ } -> true
+  | _ -> false
+
+(* Returns the rewrite rule associated to a type, if any. *)
+let rec rule_of_type typ =
+  match (Ctype.expand_head !Toploop.toplevel_env typ).Types.desc with
+  | Types.Tconstr (path, _, _) -> begin
+      try
+        Some (List.find (fun rule -> rule_matches rule path) rewrite_rules)
+      with _ ->
+        None
     end
-    | _ ->
-      pstr_item
-#else
+  | _ ->
+    None
+
 let rewrite_str_item pstr_item tstr_item =
   match pstr_item, tstr_item.Typedtree.str_desc with
     | ({ Parsetree.pstr_desc = Parsetree.Pstr_eval (e, _);
@@ -571,17 +559,13 @@ let rewrite_str_item pstr_item tstr_item =
        Typedtree.Tstr_eval ({ Typedtree.exp_type = typ }, _)) -> begin
       match rule_of_type typ with
         | Some rule ->
-          if React.S.value rule.enabled && List.for_all is_persistent_in_env rule.required_values then
-            { Parsetree.pstr_desc = Parsetree.Pstr_eval (rule.rewrite loc e, []);
-              Parsetree.pstr_loc = loc }
-          else
-            pstr_item
+          { Parsetree.pstr_desc = Parsetree.Pstr_eval (rule.rewrite loc e, []);
+            Parsetree.pstr_loc = loc }
         | None ->
           pstr_item
     end
     | _ ->
       pstr_item
-#endif
 
 let rewrite phrase =
   match phrase with
@@ -590,7 +574,35 @@ let rewrite phrase =
         let tstr, _, _ = Typemod.type_structure !Toploop.toplevel_env pstr Location.none in
         Parsetree.Ptop_def (List.map2 rewrite_str_item pstr tstr.Typedtree.str_items)
       else
-        Parsetree.Ptop_def pstr
+        phrase
+    | Parsetree.Ptop_dir _ ->
+      phrase
+
+let add_let binding_name def =
+  let open Parsetree in
+  match def with
+  | { pstr_desc = Pstr_eval (expr, attr); pstr_loc } ->
+    {
+      pstr_loc;
+      pstr_desc = Pstr_value (Asttypes.Nonrecursive, [
+        {
+          pvb_pat = {
+            ppat_desc = Ppat_var { txt = binding_name; loc = pstr_loc; };
+            ppat_loc = pstr_loc;
+            ppat_attributes = [];
+          };
+          pvb_expr = expr;
+          pvb_attributes = attr;
+          pvb_loc = pstr_loc;
+        }]);
+    }
+  | _ ->
+    def
+
+let bind_expressions name phrase =
+  match phrase with
+    | Parsetree.Ptop_def pstr ->
+      Parsetree.Ptop_def (List.map (add_let name) pstr)
     | Parsetree.Ptop_dir _ ->
       phrase
 
@@ -634,17 +646,24 @@ let rec loop term =
           match result with
             | UTop.Value phrase ->
                 return (Some phrase)
-            | UTop.Error (_, msg) ->
+            | UTop.Error (locs, msg) ->
                 print_error term msg >>= fun () ->
                 return None)
         (fun () -> LTerm.flush term)
     )
   in
-
   match phrase_opt with
     | Some phrase ->
         (* Rewrite toplevel expressions. *)
+        let count = S.value UTop_private.count in
         let phrase = rewrite phrase in
+        let phrase =
+          if UTop.get_create_implicits () then
+            let binding_name = Printf.sprintf "_%d" count in
+            bind_expressions binding_name phrase
+          else
+            phrase
+        in
         (* Set the margin of standard formatters. *)
         UTop_private.set_margin Format.std_formatter;
         UTop_private.set_margin Format.err_formatter;
@@ -665,6 +684,7 @@ let rec loop term =
            (* Get the string printed. *)
            Format.pp_print_flush pp ();
            let string = Buffer.contents buffer in
+           UTop_history.add_output UTop.stashable_session_history string;
            match phrase with
              | Parsetree.Ptop_def _ ->
                  (* The string is an output phrase, colorize it. *)
@@ -762,11 +782,7 @@ let read_input_classic prompt buffer len =
     else
       Lwt_io.read_char_opt Lwt_io.stdin >>= function
         | Some c ->
-#if OCAML_VERSION >= (4, 02, 0)
             Bytes.set buffer i c;
-#else
-            buffer.[i] <- c;
-#endif
             if c = '\n' then
               return (i + 1, false)
             else
@@ -892,9 +908,7 @@ module Emacs(M : sig end) = struct
     (* Rewrite toplevel expressions. *)
     let phrase = rewrite phrase in
     try
-#if OCAML_VERSION > (4, 00, 1)
       Env.reset_cache_toplevel ();
-#endif
       ignore (Toploop.execute_phrase true Format.std_formatter phrase);
       true
     with exn ->
@@ -1090,7 +1104,7 @@ let typeof sid =
   in
   let out_sig_item =
     try
-      let (path, ty_decl) = Env.lookup_type id env in
+      let (path, ty_decl) = lookup_type id env in
       let id = Ident.create (Path.name path) in
       Some (Printtyp.tree_of_type_declaration id ty_decl Types.Trec_not)
     with Not_found ->
@@ -1106,12 +1120,8 @@ let typeof sid =
       Some (Printtyp.tree_of_type_declaration id ty_decl Types.Trec_not)
     with Not_found ->
     try
-#if OCAML_VERSION < (4, 02, 0)
-      let (path, mod_typ) = Env.lookup_module id env in
-#else
       let path = Env.lookup_module id env ~load:true in
       let mod_typ = (Env.find_module path env).Types.md_type in
-#endif
       let id = Ident.create (Path.name path) in
       Some (Printtyp.tree_of_module id mod_typ Types.Trec_not)
     with Not_found ->
@@ -1123,12 +1133,6 @@ let typeof sid =
     try
       let cstr_desc = Env.lookup_constructor id env in
       match cstr_desc.Types.cstr_tag with
-#if OCAML_VERSION < (4, 02, 0)
-      | Types.Cstr_exception (_path, loc) ->
-        let path, exn_decl = Typedecl.transl_exn_rebind env loc id in
-        let id = Ident.create (Path.name path) in
-        Some (Printtyp.tree_of_exception_declaration id exn_decl)
-#endif
       | _ ->
         let (path, ty_decl) = from_type_desc cstr_desc.Types.cstr_res.Types.desc in
         let id = Ident.create (Path.name path) in
@@ -1219,13 +1223,9 @@ let args = Arg.align [
   "-noassert", Arg.Set Clflags.noassert, " Do not compile assertion checks";
   "-nolabels", Arg.Set Clflags.classic, " Ignore non-optional labels in types";
   "-nostdlib", Arg.Set Clflags.no_std_include, " Do not add default directory to the list of include directories";
-#if OCAML_VERSION >= (4, 02, 0)
   "-ppx", Arg.String (fun ppx -> Clflags.all_ppx := ppx :: !Clflags.all_ppx), "<command> Pipe abstract syntax trees through preprocessor <command>";
-#endif
   "-principal", Arg.Set Clflags.principal, " Check principality of type inference";
-#if OCAML_VERSION >= (4, 02, 0)
   "-safe-string", Arg.Clear Clflags.unsafe_string, " Make strings immutable";
-#endif
   "-short-paths", Arg.Clear Clflags.real_paths, " Shorten paths in types (the default)";
   "-no-short-paths", Arg.Set Clflags.real_paths, " Do not shorten paths in types";
   "-rectypes", Arg.Set Clflags.recursive_types, " Allow arbitrary recursive types";
@@ -1256,6 +1256,10 @@ let args = Arg.align [
   " Hide identifiers starting with a '_' (the default)";
   "-show-reserved", Arg.Unit (fun () -> UTop.set_hide_reserved false),
   " Show identifiers starting with a '_'";
+  "-no-implicit-bindings", Arg.Unit (fun () -> UTop.set_create_implicits false),
+  " Don't add implicit bindings for expressions (the default)";
+  "-implicit-bindings", Arg.Unit (fun () -> UTop.set_create_implicits true),
+  " Add implicit bindings: <expr>;; -> let _0 = <expr>;;";
   "-no-autoload", Arg.Clear autoload,
   " Disable autoloading of files in $OCAML_TOPLEVEL_PATH/autoload";
   "-require", Arg.String (fun s -> preload := `Packages (UTop.split_words s) :: !preload),
@@ -1279,9 +1283,11 @@ let load_init_files dir =
     files
 ;;
 
-let common_init () =
+let common_init ~initial_env =
   (* Initializes toplevel environment. *)
-  Toploop.initialize_toplevel_env ();
+  (match initial_env with
+   | None -> Toploop.initialize_toplevel_env ()
+   | Some env -> Toploop.toplevel_env := env);
   (* Set the global input name. *)
   Location.input_name := UTop.input_name;
   (* Make sure SIGINT is catched while executing OCaml code. *)
@@ -1336,14 +1342,14 @@ let load_inputrc () =
       Lwt_log.error_f "error in key bindings file %S, line %d: %s" fname line msg
     | exn -> Lwt.fail exn)
 
-let main_aux () =
+let main_aux ~initial_env =
   Arg.parse args file_argument usage;
   if not (prepare ()) then exit 2;
   if !emacs_mode then begin
     UTop_private.set_ui UTop_private.Emacs;
     let module Emacs = Emacs (struct end) in
     Printf.printf "Welcome to Owl version %s (using OCaml version %s)!\n\n%!" UTop.version Sys.ocaml_version;
-    common_init ();
+    common_init ~initial_env;
     Emacs.loop ()
   end else begin
     UTop_private.set_ui UTop_private.Console;
@@ -1356,15 +1362,13 @@ let main_aux () =
       (* Display a welcome message. *)
       Lwt_main.run (welcome term);
       (* Common initialization. *)
-      common_init ();
+      common_init ~initial_env; 
       (* Set defaults *)
       UTop.set_topfind_verbose false;
       (* UTop.set_show_box false; *)
       UTop.set_profile UTop.Light;
       UTop.prompt := fst (React.S.create LTerm_text.(
 			     eval [ B_fg (LTerm_style.rgb 2 16 173); S "\nowl> "]));
-
-      
       (* Print help message. *)
       (* print_string "\nType #utop_help for help about using utop.\n\n"; *)
       flush stdout;
@@ -1383,9 +1387,9 @@ let main_aux () =
   (* Don't let the standard toplevel run... *)
   exit 0
 
-let main () =
+let main_internal ~initial_env =
   try
-    main_aux ()
+    main_aux ~initial_env
   with exn ->
     (match exn with
        | Unix.Unix_error (error, func, "") ->
@@ -1397,3 +1401,91 @@ let main () =
     Printexc.print_backtrace stderr;
     flush stderr;
     exit 2
+
+let main () = main_internal ~initial_env:None
+
+type value = V : string * _ -> value
+
+exception Found of Env.t
+
+#if OCAML_VERSION >= (4, 03, 0)
+let get_required_label name args =
+  match List.find (fun (lab, _) -> lab = Asttypes.Labelled name) args with
+  | _, x -> x
+  | exception Not_found -> None
+#else
+let get_required_label name args =
+  match List.find (fun (lab, _, k) -> lab = "loc" && k = Typedtree.Required) args with
+  | _, x, _ -> x
+  | _ -> None
+  | exception Not_found -> None
+#endif
+
+let walk dir ~init ~f =
+  let rec loop dir acc =
+    let acc = f dir acc in
+    ArrayLabels.fold_left (Sys.readdir dir) ~init:acc ~f:(fun acc fn ->
+      let fn = Filename.concat dir fn in
+      match Unix.lstat fn with
+      | { st_kind = S_DIR; _ } -> loop fn acc
+      | _                      -> acc)
+  in
+  match Unix.lstat dir with
+  | exception Unix.Unix_error(ENOENT, _, _) -> init
+  | _ -> loop dir init
+
+let interact ?(search_path=[]) ?(build_dir="_build") ~unit ~loc:(fname, lnum, cnum, _)
+      ~values =
+  let search_path = walk build_dir ~init:search_path ~f:(fun dir acc -> dir :: acc) in
+  let cmt_fname =
+    try
+      Misc.find_in_path_uncap search_path (unit ^ ".cmt")
+    with Not_found ->
+      Printf.ksprintf failwith "%s.cmt not found in search path!" unit
+  in
+  let cmt_infos = Cmt_format.read_cmt cmt_fname in
+  let module Search =
+    TypedtreeIter.MakeIterator(struct
+      include TypedtreeIter.DefaultIteratorArgument
+
+      let enter_expression (e : Typedtree.expression) =
+        match e.exp_desc with
+        | Texp_apply (_, args) -> begin
+            try
+              match get_required_label "loc"    args,
+                    get_required_label "values" args
+              with
+              | Some l, Some v ->
+                let pos = l.exp_loc.loc_start in
+                if pos.pos_fname = fname &&
+                   pos.pos_lnum = lnum   &&
+                   pos.pos_cnum - pos.pos_bol = cnum then
+                  raise (Found v.exp_env)
+              | _ -> ()
+            with Not_found -> ()
+          end
+        | _ -> ()
+     end) in
+  try
+    begin match cmt_infos.cmt_annots with
+    | Implementation st -> Search.iter_structure st
+    | _ -> ()
+    end;
+    failwith "Couldn't find location in cmt file"
+  with Found env ->
+  try
+    List.iter Topdirs.dir_directory (search_path @ cmt_infos.cmt_loadpath);
+    let env = Envaux.env_of_only_summary env in
+    List.iter (fun (V (name, v)) -> Toploop.setvalue name (Obj.repr v)) values;
+    main_internal ~initial_env:(Some env)
+  with exn ->
+    Location.report_exception Format.err_formatter exn;
+    exit 2
+
+let () =
+  Location.register_error_of_exn
+    (function
+      | Envaux.Error err ->
+        Some (Location.error_of_printer_file Envaux.report_error err)
+      | _ -> None
+    )

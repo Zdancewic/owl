@@ -80,13 +80,16 @@ let load () =
       styles.style_foreground <- LTerm_resources.get_color "foreground" res;
       styles.style_background <- LTerm_resources.get_color "background" res;
       styles.style_cursor <- LTerm_resources.get_color "cursor" res;
-      (match String.lowercase (LTerm_resources.get "profile" res) with
+      (match String.lowercase_ascii (LTerm_resources.get "profile" res) with
          | "light" -> UTop.set_profile UTop.Light
          | "dark" -> UTop.set_profile UTop.Dark
          | "" -> ()
          | str -> raise (LTerm_resources.Error (Printf.sprintf "invalid profile %S" str)));
       UTop_private.error_style := styles.style_error;
       UTop_private.autoload := LTerm_resources.get_bool "autoload" res <> Some false;
+      (match LTerm_resources.get "external-editor" res with
+       | "" -> ()
+       | s  -> UTop.set_external_editor s);
       return ())
     (function
     | Unix.Unix_error(Unix.ENOENT, _, _) ->

@@ -50,6 +50,24 @@ val get_hide_reserved : unit -> bool
 val set_hide_reserved : bool -> unit
   (** Modifies {!hide_reserved}. *)
 
+val create_implicits : bool signal
+  (** If [true] (not the default) expressions entered in the toplevel are
+      automatically bound, for example:
+
+      {[
+        # 3 + 4;;
+        _0 : int = 7
+        # _0 + 10;;
+        _1 : int = 17
+      ]}
+  *)
+
+val get_create_implicits : unit -> bool
+  (** Returns the value of {!create_implicits}. *)
+
+val set_create_implicits : bool -> unit
+  (** Modifies {!create_implicits}. *)
+
 val topfind_verbose : bool signal
   (** If [false] (the default) messages from findlib are hidden. This is only effective
       with findlib >= 1.4. *)
@@ -79,7 +97,7 @@ val set_margin_function : (LTerm_geom.size -> int option) -> unit
       The default is:
 
       {[
-        fun size -> Some (max 80 size.cols)
+        fun size -> Some (min 80 size.cols)
       ]}
   *)
 
@@ -177,6 +195,11 @@ val end_and_accept_current_phrase : LTerm_read_line.action
      ]}
  *)
 
+(** External editor command. [None] for default. *)
+val external_editor : string signal
+val set_external_editor : string -> unit
+val get_external_editor : unit -> string
+
 (** {6 History} *)
 
 val history : LTerm_history.t
@@ -204,6 +227,14 @@ val history_file_max_entries : int option ref
   (** Maximum entries to store in the history file. If [None] (the
       default) the maximum number of entries if [history] will be
       used. *)
+
+val stashable_session_history : UTop_history.t
+  (** A history consisting of inputs and resulting values or errors of the
+      current session. Because stashing is supposed to produce a valid OCaml
+      file which will behave roughly the same as the console, it is best if
+      this history never gets truncated. While this will certainly lead to a
+      slight memory leaking problem, UTop sessions are rarely long enough to
+      make it a serious issue. *)
 
 (** {6 Console specific configuration} *)
 

@@ -1,9 +1,0 @@
-PKG graphics
-S src
-S src/lib
-S src/top
-S src/owl
-B _build/src
-B _build/src/lib
-B _build/src/top
-B _build/src/owl

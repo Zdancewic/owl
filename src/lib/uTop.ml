@@ -17,7 +17,7 @@ let (>>=) = Lwt.(>>=)
 
 module String_set = Set.Make(String)
 
-let version = UTop_version.version
+let version = "%%VERSION%%"
 
 (* +-----------------------------------------------------------------+
    | History                                                         |
@@ -27,6 +27,7 @@ let history = LTerm_history.create []
 let history_file_name = ref (Some (Filename.concat LTerm_resources.home ".utop-history"))
 let history_file_max_size = ref None
 let history_file_max_entries = ref None
+let stashable_session_history = UTop_history.create ()
 
 (* +-----------------------------------------------------------------+
    | Hooks                                                           |
@@ -69,12 +70,19 @@ type syntax =
   | Camlp4r
 
 let hide_reserved, get_hide_reserved, set_hide_reserved = make_variable true
+let create_implicits, get_create_implicits, set_create_implicits = make_variable false
 let show_box, get_show_box, set_show_box = make_variable true
 let syntax, get_syntax, set_syntax = make_variable Normal
 let phrase_terminator, get_phrase_terminator, set_phrase_terminator = make_variable ";;"
 let auto_run_lwt, get_auto_run_lwt, set_auto_run_lwt = make_variable true
 let auto_run_async, get_auto_run_async, set_auto_run_async = make_variable true
 let topfind_verbose, get_topfind_verbose, set_topfind_verbose = make_variable false
+let external_editor, get_external_editor, set_external_editor =
+  make_variable
+    (try
+       Sys.getenv "EDITOR"
+     with Not_found ->
+       "vi")
 
 (* Ugly hack until the action system of lambda-term is improved *)
 let end_and_accept_current_phrase : LTerm_read_line.action =
@@ -139,11 +147,10 @@ let collect_formatters buf pps f =
       pps save
   in
   (* Output functions. *)
-  let out_string str ofs len = Buffer.add_substring buf str ofs len
-  and out_flush = ignore
-  and out_newline () = Buffer.add_char buf '\n'
-  and out_spaces n = for i = 1 to n do Buffer.add_char buf ' ' done in
-  let out_functions = { Format.out_string; out_flush; out_newline; out_spaces } in
+  let out_functions =
+    let ppb = Format.formatter_of_buffer buf in
+    Format.pp_get_formatter_out_functions ppb ()
+  in
   (* Replace formatter functions. *)
   List.iter
     (fun pp ->
@@ -254,13 +261,16 @@ let parse_default parse str eos_is_error =
       | Syntaxerr.Variable_in_scope (loc, var) ->
         Error ([mkloc loc],
                Printf.sprintf "In this scoped type, variable '%s is reserved for the local type %s." var var)
-#if OCAML_VERSION >= (4, 02, 0)
       | Syntaxerr.Not_expecting (loc, nonterm) ->
           Error ([mkloc loc],
                  Printf.sprintf "Syntax error: %s not expected" nonterm)
       | Syntaxerr.Ill_formed_ast (loc, s) ->
           Error ([mkloc loc],
                  Printf.sprintf "Error: broken invariant in parsetree: %s" s)
+#if OCAML_VERSION >= (4, 03, 0)
+      | Syntaxerr.Invalid_package_type (loc, s) ->
+          Error ([mkloc loc],
+                 Printf.sprintf "Invalid package type: %s" s)
 #endif
     end
     | Syntaxerr.Escape_error | Parsing.Parse_error ->
@@ -320,34 +330,6 @@ let check_phrase phrase =
         (* Construct "let _ () = let module _ = struct <items> end in ()" in order to test
            the typing and compilation of [items] without evaluating them. *)
         let unit = with_loc loc (Longident.Lident "()") in
-#if OCAML_VERSION < (4, 02, 0)
-        let structure = {
-          pmod_loc = loc;
-          pmod_desc = Pmod_structure (item :: items);
-        } in
-        let unit_expr = {
-          pexp_desc = Pexp_construct (unit, None, false);
-          pexp_loc = loc;
-        } in
-        let unit_patt = {
-          ppat_desc = Ppat_construct (unit, None, false);
-          ppat_loc = loc;
-        } in
-        let letmodule = {
-          pexp_desc = Pexp_letmodule (with_loc loc "_", structure, unit_expr);
-          pexp_loc = loc;
-        } in
-        let func = {
-          pexp_desc = Pexp_function ("", None, [(unit_patt, letmodule)]);
-          pexp_loc = loc;
-        } in
-        let top_def = {
-          pstr_desc = Pstr_value (Asttypes.Nonrecursive,
-                                  [({ ppat_desc = Ppat_var (with_loc loc "_");
-                                      ppat_loc = loc }, func)]);
-          pstr_loc = loc;
-        } in
-#else
         let top_def =
           let open Ast_helper in
           with_default_loc loc
@@ -358,7 +340,6 @@ let check_phrase phrase =
                       (Mod.structure (item :: items))
                       (Exp.construct unit None))))
         in
-#endif
         let check_phrase = Ptop_def [top_def] in
         try
           let _ =
@@ -524,8 +505,11 @@ let () =
 
 utop defines the following directives:
 
+#help            : list all directives
 #utop_bindings   : list all the current key bindings
 #utop_macro      : display the currently recorded macro
+#utop_stash      : store all the valid commands from your current session in a file
+#utop_save       : store the current session with a simple prompt in a file
 #topfind_log     : display messages recorded from findlib since the beginning of the session
 #topfind_verbose : enable/disable topfind verbosity
 
@@ -612,6 +596,57 @@ For a complete description of utop, look at the utop(1) manual page."));
                output_char stdout '\n')
             macro;
           flush stdout))
+
+let () =
+  Hashtbl.add Toploop.directive_table "pwd"
+    (Toploop.Directive_none
+       (fun () -> print_endline (Sys.getcwd ())))
+
+let make_stash_directive entry_formatter fname =
+  if get_ui () = Emacs then
+    print_endline "Stashing is currently not supported in Emacs"
+  else
+  let entries = UTop_history.contents stashable_session_history in
+  (* remove the stash directive from its output *)
+  let entries = match entries with [] -> [] | _ :: e -> e in
+  let entries = List.rev entries in
+  Printf.printf "Stashing %d entries in %s ... " (List.length entries) fname;
+  try
+    let oc = open_out fname in
+    try
+      List.iter
+        (fun e ->
+           let line = entry_formatter e in
+           output_string oc line;
+           output_char oc '\n')
+        entries;
+      close_out oc;
+      Printf.printf "Done.\n";
+    with exn ->
+      close_out oc;
+      raise exn
+  with exn ->
+    Printf.printf "Error with file %s: %s\n" fname @@ Printexc.to_string exn
+
+let () =
+  let fn = make_stash_directive begin function
+  | UTop_history.Input i ->
+    i
+  | Output out | Error out | Bad_input out | Warnings out ->
+    Printf.sprintf "(* %s *)" out
+  end
+  in
+  Hashtbl.add Toploop.directive_table "utop_stash" (Toploop.Directive_string fn)
+
+let () =
+  let fn = make_stash_directive begin function
+  | UTop_history.Input i | Bad_input i ->
+    Printf.sprintf "# %s" i
+  | Output out | Error out | Warnings out ->
+    out
+  end
+  in
+  Hashtbl.add Toploop.directive_table "utop_save" (Toploop.Directive_string fn)
 
 (* +-----------------------------------------------------------------+
    | Camlp4                                                          |
@@ -756,8 +791,8 @@ let () =
 let () =
   (* "utop" is an internal library so it is not passed as "-package"
      to "ocamlfind ocamlmktop". *)
-  Topfind.don't_load ["utop"];
-  Topfind.add_predicates ["pkg_utop"];
+  Topfind.don't_load_deeply ["utop"];
+  Topfind.add_predicates ["byte"; "toploop"];
   (* Add findlib path so Topfind is available and it won't be
      initialized twice if the user does [#use "topfind"]. *)
   Topdirs.dir_directory (Findlib.package_directory "findlib");
