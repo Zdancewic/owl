@@ -1,11 +1,10 @@
 #directory "_build/install/default/bin"
-#load "owllib.cma"
-#load "owlGraphics.cma"
+#load "graphics.cma"
+#require "owlcode"
+#load "owlcode.cma"
 
 (* Added by OPAM. *)
 let () =
   try Topdirs.dir_directory (Sys.getenv "OCAML_TOPLEVEL_PATH")
   with Not_found -> ()
 
-;; open Owllib
-;; open OwlGraphics

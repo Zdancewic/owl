@@ -3,6 +3,7 @@
 (library
  ((name owlUtop)
   (wrapped false)
+  (flags (:standard -safe-string))
   (modes (byte))
   (libraries (compiler-libs.toplevel findlib.top lambda-term threads))
   (preprocess (action (run ${bin:cppo} -V OCAML:${ocaml_version} ${<})))))

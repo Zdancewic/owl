@@ -1,20 +1,21 @@
 (*
- * uTop_main.cppo.ml
- *
- * -----------------
- * Original code:
+ * uTop_main.ml
+ * ------------
  * Copyright : (c) 2011, Jeremie Dimino <jeremie@dimino.org>
  * Licence   : BSD3
  *
+ * This file is a part of utop.
+ *
  * Modified code:
- * Copyright : (c) 2015, Steve Zdancewic <steve.zdancewic@gmail.com>
+ * Copyright : (c) 2015,2018 Steve Zdancewic <steve.zdancewic@gmail.com>
  *
  * This file is modified from utop as part of owl.
  *
  *)
 
-open CamomileLibraryDyn.Camomile
+open CamomileLibraryDefault.Camomile
 open Lwt_react
+open LTerm_dlist
 open LTerm_text
 open LTerm_geom
 open UTop_token
@@ -322,75 +323,76 @@ let is_implicit_name name =
   with
     Failure _ -> false
 
-let rec map_items unwrap wrap items =
-  match items with
-  | [] ->
-    []
-  | item :: items ->
-    let sig_item, _ = unwrap item in
-    let name, rec_status =
-      match sig_item with
-      | Outcometree.Osig_class (_, name, _, _, rs)
-      | Outcometree.Osig_class_type (_, name, _, _, rs)
-      | Outcometree.Osig_module (name, _, rs)
-      | Outcometree.Osig_type ({ Outcometree.otype_name = name }, rs) ->
-        (name, rs)
-      | Outcometree.Osig_typext ({ Outcometree.oext_name = name}, _)
-      | Outcometree.Osig_modtype (name, _)
+let map_items unwrap wrap items =
+  let rec aux acc = function
+    | [] ->
+       acc
+    | item :: items ->
+       let sig_item, _ = unwrap item in
+       let name, rec_status =
+         match sig_item with
+         | Outcometree.Osig_class (_, name, _, _, rs)
+         | Outcometree.Osig_class_type (_, name, _, _, rs)
+         | Outcometree.Osig_module (name, _, rs)
+         | Outcometree.Osig_type ({ Outcometree.otype_name = name }, rs) ->
+            (name, rs)
+         | Outcometree.Osig_typext ({ Outcometree.oext_name = name}, _)
+         | Outcometree.Osig_modtype (name, _)
 #if OCAML_VERSION < (4, 03, 0)
-      | Outcometree.Osig_value (name, _, _) ->
-        (name, Outcometree.Orec_not)
+         | Outcometree.Osig_value (name, _, _) ->
+            (name, Outcometree.Orec_not)
 #else
-      | Outcometree.Osig_value { oval_name = name; _ } ->
-        (name, Outcometree.Orec_not)
-      | Outcometree.Osig_ellipsis -> ("", Outcometree.Orec_not)
+         | Outcometree.Osig_value { oval_name = name; _ } ->
+            (name, Outcometree.Orec_not)
+         | Outcometree.Osig_ellipsis -> ("", Outcometree.Orec_not)
 #endif
-    in
-
-    let keep =
-      name = "" || name.[0] <> '_' ||
-      (UTop.get_create_implicits () && is_implicit_name name)
-    in
-    if keep then
-      item :: map_items unwrap wrap items
-    else
-      (* Replace the [Orec_next] at the head of items by [Orec_first] *)
-      let items =
-        match items with
-        | [] ->
-          []
-        | item :: items' ->
-          let sig_item, extra = unwrap item in
-          match sig_item with
-          | Outcometree.Osig_class (a, name, b, c, rs) ->
-            if rs = Outcometree.Orec_next then
-              wrap (Outcometree.Osig_class (a, name, b, c, Outcometree.Orec_first)) extra :: items'
-            else
-              items
-          | Outcometree.Osig_class_type (a, name, b, c, rs) ->
-            if rs = Outcometree.Orec_next then
-              wrap (Outcometree.Osig_class_type (a, name, b, c, Outcometree.Orec_first)) extra :: items'
-            else
-              items
-          | Outcometree.Osig_module (name, a, rs) ->
-            if rs = Outcometree.Orec_next then
-              wrap (Outcometree.Osig_module (name, a, Outcometree.Orec_first)) extra :: items'
-            else
-              items
-          | Outcometree.Osig_type (oty, rs) ->
-            if rs = Outcometree.Orec_next then
-              wrap (Outcometree.Osig_type (oty, Outcometree.Orec_first)) extra :: items'
-            else
-              items
-          | Outcometree.Osig_typext _
+       in
+       let keep =
+         name = "" || name.[0] <> '_' ||
+           (UTop.get_create_implicits () && is_implicit_name name)
+       in
+       if keep then
+         aux (item :: acc) items
+       else
+         (* Replace the [Orec_next] at the head of items by [Orec_first] *)
+         let items =
+           match items with
+           | [] ->
+              []
+           | item :: items' ->
+              let sig_item, extra = unwrap item in
+              match sig_item with
+              | Outcometree.Osig_class (a, name, b, c, rs) ->
+                 if rs = Outcometree.Orec_next then
+                   wrap (Outcometree.Osig_class (a, name, b, c, Outcometree.Orec_first)) extra :: items'
+                 else
+                   items
+              | Outcometree.Osig_class_type (a, name, b, c, rs) ->
+                 if rs = Outcometree.Orec_next then
+                   wrap (Outcometree.Osig_class_type (a, name, b, c, Outcometree.Orec_first)) extra :: items'
+                 else
+                   items
+              | Outcometree.Osig_module (name, a, rs) ->
+                 if rs = Outcometree.Orec_next then
+                   wrap (Outcometree.Osig_module (name, a, Outcometree.Orec_first)) extra :: items'
+                 else
+                   items
+              | Outcometree.Osig_type (oty, rs) ->
+                 if rs = Outcometree.Orec_next then
+                   wrap (Outcometree.Osig_type (oty, Outcometree.Orec_first)) extra :: items'
+                 else
+                   items
+              | Outcometree.Osig_typext _
 #if OCAML_VERSION >= (4, 03, 0)
-          | Outcometree.Osig_ellipsis
+              | Outcometree.Osig_ellipsis
 #endif
-          | Outcometree.Osig_modtype _
-          | Outcometree.Osig_value _ ->
-            items
-      in
-      map_items unwrap wrap items
+              | Outcometree.Osig_modtype _
+              | Outcometree.Osig_value _ ->
+                 items
+         in
+         aux acc items
+  in
+  List.rev (aux [] items)
 
 let print_out_signature pp items =
   if UTop.get_hide_reserved () then
@@ -541,7 +543,7 @@ let is_eval = function
   | _ -> false
 
 (* Returns the rewrite rule associated to a type, if any. *)
-let rec rule_of_type typ =
+let rule_of_type typ =
   match (Ctype.expand_head !Toploop.toplevel_env typ).Types.desc with
   | Types.Tconstr (path, _, _) -> begin
       try
@@ -633,7 +635,7 @@ let rec loop term =
   UTop_private.set_count (S.value UTop_private.count + 1);
 
   (* Call hooks. *)
-  Lwt_sequence.iter_l (fun f -> f ()) UTop.new_command_hooks;
+  LTerm_dlist.iter_l (fun f -> f ()) UTop.new_command_hooks;
 
   (* Read interactively user input. *)
   let phrase_opt =
@@ -738,6 +740,7 @@ let welcome term =
   let line3 = (bn "  / /_/ / |/|/ / /   ") @ (fe "/)__)") in
   let line4 = (ln "──") @ (bn "\\____/|__,__/_/") @ (ln "─────") @ (bk "\"") @ (ln "─") @ (bk "\"") @ (ln "───") in
   let indent = (size.cols - String.length str) / 2 in
+
   (* Draw the message in a box. *)
 
   LTerm_draw.fill_style ctx LTerm_style.({ none with foreground = Some owl_line; bold = Some true });
@@ -802,18 +805,18 @@ module Emacs(M : sig end) = struct
   let command_oc = Unix.out_channel_of_descr (Unix.dup Unix.stdout)
 
   let split_at ?(trim=false) ch str =
-    let rec aux i j =
+    let rec aux acc i j =
       if j = String.length str then
         if trim && i = j then
-          []
+          acc
         else
-          [String.sub str i (j - i)]
+          (String.sub str i (j - i)) :: acc
       else if str.[j] = ch then
-        String.sub str i (j - i) :: aux (j + 1) (j + 1)
+        aux (String.sub str i (j - i) :: acc) (j + 1) (j + 1)
       else
-        aux i (j + 1)
+        aux acc i (j + 1)
     in
-    aux 0 0
+    List.rev (aux [] 0 0)
 
   (* +---------------------------------------------------------------+
      | Sending commands to Emacs                                     |
@@ -986,7 +989,7 @@ module Emacs(M : sig end) = struct
     UTop_private.set_count (S.value UTop_private.count + 1);
 
     (* Call hooks. *)
-    Lwt_sequence.iter_l (fun f -> f ()) UTop.new_command_hooks;
+    LTerm_dlist.iter_l (fun f -> f ()) UTop.new_command_hooks;
 
     (* Tell emacs we are ready. *)
     send "prompt" "";
@@ -1026,6 +1029,18 @@ module Emacs(M : sig end) = struct
             loop_commands history_prev history_next
           else
             loop ()
+      | Some ("complete-company", _) ->
+        let input = read_data () in
+        let _, words =
+          UTop_complete.complete
+            ~syntax:(UTop.get_syntax ())
+            ~phrase_terminator:(UTop.get_phrase_terminator ())
+            ~input
+        in
+        send "completion-start" "";
+        List.iter (fun (w, _) -> send "completion" w) words;
+        send "completion-stop" "";
+        loop_commands history_prev history_next
       | Some ("complete", _) ->
           let input = read_data () in
           let start, words =
@@ -1209,14 +1224,15 @@ let print_version () =
   exit 0
 
 let print_version_num () =
-  Printf.printf "%s\n" UTop.version
+  Printf.printf "%s\n" UTop.version;
+  exit 0
 
 (* Config from command line *)
 let autoload = ref true
 
 let args = Arg.align [
   "-absname", Arg.Set Location.absname, " Show absolute filenames in error message";
-  "-I", Arg.String (fun dir ->  Clflags.include_dirs := Misc.expand_directory Config.standard_library dir :: !Clflags.include_dirs), "<dir> Add <dir> to the list of include directories";
+  "-I", Arg.String (fun dir ->  Clflags.include_dirs := dir :: !Clflags.include_dirs), "<dir> Add <dir> to the list of include directories";
   "-init", Arg.String (fun s -> Clflags.init_file := Some s), "<file> Load <file> instead of default init file";
   "-labels", Arg.Clear Clflags.classic, " Use commuting label mode";
   "-no-app-funct", Arg.Clear Clflags.applicative_functors, " Deactivate applicative functors";
@@ -1292,7 +1308,6 @@ let common_init ~initial_env =
   Location.input_name := UTop.input_name;
   (* Make sure SIGINT is catched while executing OCaml code. *)
   Sys.catch_break true;
-
   (* Load system init files. *)
   (match try Some (Sys.getenv "OCAML_TOPLEVEL_PATH") with Not_found -> None with
     | Some dir ->
@@ -1342,10 +1357,13 @@ let load_inputrc () =
       Lwt_log.error_f "error in key bindings file %S, line %d: %s" fname line msg
     | exn -> Lwt.fail exn)
 
+let protocol_version = 1
+
 let main_aux ~initial_env =
   Arg.parse args file_argument usage;
   if not (prepare ()) then exit 2;
   if !emacs_mode then begin
+    Printf.printf "protocol-version:%d\n%!" protocol_version;
     UTop_private.set_ui UTop_private.Emacs;
     let module Emacs = Emacs (struct end) in
     Printf.printf "Welcome to Owl version %s (using OCaml version %s)!\n\n%!" UTop.version Sys.ocaml_version;
@@ -1362,7 +1380,9 @@ let main_aux ~initial_env =
       (* Display a welcome message. *)
       Lwt_main.run (welcome term);
       (* Common initialization. *)
-      common_init ~initial_env; 
+      common_init ~initial_env;
+
+(* OWL ---------------------------------------------------------------------- *)
       (* Set defaults *)
       UTop.set_topfind_verbose false;
       (* UTop.set_show_box false; *)
@@ -1371,6 +1391,8 @@ let main_aux ~initial_env =
 			     eval [ B_fg (LTerm_style.rgb 2 16 173); S "\nowl> "]));
       (* Print help message. *)
       (* print_string "\nType #utop_help for help about using utop.\n\n"; *)
+(*  ------------------------------------------------------------------------- *)
+
       flush stdout;
       (* Main loop. *)
       try
